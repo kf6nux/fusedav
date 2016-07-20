@@ -35,3 +35,4 @@ tests/one-open-many-writes
 /src/*.plist
 _trial_temp*
 
+.vscode

@@ -311,6 +311,36 @@ static size_t write_parsing_callback(void *contents, size_t length, size_t nmemb
     return real_size;
 }
 
+struct MemoryStruct {
+  char *memory;
+  size_t size;
+  size_t cap;
+};
+ 
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
+{
+  size_t realsize = size * nmemb;
+  struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+  
+  // Do we need to realloc?
+  if(mem->size + realsize >= mem->cap) {
+      mem->memory = realloc(mem->memory, mem->cap * 2);
+      if(mem->memory == NULL) {
+          /* out of memory! */ 
+          printf("not enough memory (realloc returned NULL)\n");
+          return 0;
+      }
+      mem->cap = mem->cap * 2;
+  }
+  
+ 
+  memcpy(&(mem->memory[mem->size]), contents, realsize);
+  mem->size += realsize;
+  mem->memory[mem->size] = 0;
+ 
+  return realsize;
+}
+
 int simple_propfind(const char *path, size_t depth, time_t last_updated, props_result_callback results,
         void *userdata, GError **gerr) {
     static const char *funcname = "simple_propfind";
@@ -354,13 +384,21 @@ int simple_propfind(const char *path, size_t depth, time_t last_updated, props_r
         state.failure = false;
         state.session = session;
 
+        // Configure memeory copy
+        struct MemoryStruct chunk;
+        chunk.memory = malloc(1024*1024);  /* will be grown as needed by the realloc above */ 
+        chunk.size = 0;    /* no data at this point */ 
+        chunk.cap = 1024*1024;
+        curl_easy_setopt(session, CURLOPT_WRITEDATA, (void *) &chunk);
+        curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+
         // Configure the parser.
         parser = XML_ParserCreateNS(NULL, '\0');
         XML_SetUserData(parser, &state);
         XML_SetElementHandler(parser, startElement, endElement);
         XML_SetCharacterDataHandler(parser, characterDataHandler);
-        curl_easy_setopt(session, CURLOPT_WRITEDATA, (void *) parser);
-        curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, write_parsing_callback);
+        // curl_easy_setopt(session, CURLOPT_WRITEDATA, (void *) parser);
+        // curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, write_parsing_callback);
 
         // Add the Depth header and PROPFIND verb.
         curl_easy_setopt(session, CURLOPT_CUSTOMREQUEST, "PROPFIND");
@@ -384,6 +422,8 @@ int simple_propfind(const char *path, size_t depth, time_t last_updated, props_r
             funcname, last_updated > 0 ? "progressive" : "complete", last_updated);
 
         timed_curl_easy_perform(session, &res, &response_code, &elapsed_time);
+        write_parsing_callback(chunk.memory, chunk.size, 1, (void *) parser);
+        free(chunk.memory);
 
         if (slist) curl_slist_free_all(slist);
 
